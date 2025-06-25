@@ -44,9 +44,9 @@ def value_iteration(S: Set, A: Set, P: Callable, R: Callable, gamma: float, max_
         delta = 0       # Factor to check convergence of value function
         k = k+1         # Increment iterations
         for s in S:     # Update value function for each state in new iteration
-            V_next[s] = min(bellman_eq(s, S, A, P, R, gamma, Vk=Vk).values())
+            V_next[s] = min(bellman_eq(s, S, A, P, R, gamma, Vk).values())
             delta = max(delta, abs(V_next[s] - Vk[s]))
-        Vk = V_next      # Update penultimate value function for all states for next iteration
+        Vk = V_next.copy()      # Update penultimate value function for all states for next iteration
         if theta != None and delta < theta: # Convergence (termination) condition for value function (if applicable)
             print("Converged!")
             break
