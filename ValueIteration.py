@@ -40,7 +40,7 @@ def value_iteration(S: Set, A: Set, P: Callable, R: Callable, gamma: float, max_
     k = 0 # iteration counter
 
     while k < max_iterations: # Iteration termination condition
-        # print(Vk)
+        # print(k, Vk)
         delta = 0       # Factor to check convergence of value function
         k = k+1         # Increment iterations
         for s in S:     # Update value function for each state in new iteration
@@ -52,6 +52,7 @@ def value_iteration(S: Set, A: Set, P: Callable, R: Callable, gamma: float, max_
             break
 
     for s in S: # Store optimal policy for each state
-        policy[s] = min(bellman_eq(s, S, A, P, R, gamma, Vk), key = bellman_eq(s, S, A, P, R, gamma, Vk).get)
+        last_value = bellman_eq(s, S, A, P, R, gamma, Vk)
+        policy[s] = min(last_value, key = last_value.get)
 
     return {"optimal_policy": policy, "value_function": V_next}
