@@ -3,7 +3,7 @@ from typing import Set, Callable, Dict
 import numpy as np
 
 # Define the value iteration algorithm as a function
-def value_iteration(S: Set, A: Set, P: Callable, R: Callable, gamma: float, max_iterations: int,
+def value_iteration(S: Set, A: Set, P: Dict, R: Dict, gamma: float, max_iterations: int,
                     bellman_eq: Callable, V_init: Dict = None, theta: float = None) -> Dict:
     '''
     Implements the value iteration algorithm to solve a MDP with given
