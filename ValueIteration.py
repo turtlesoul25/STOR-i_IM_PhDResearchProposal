@@ -1,6 +1,7 @@
 # Import packages
 from typing import Set, Callable, Dict
 import numpy as np
+import pickle 
 
 # Define the value iteration algorithm as a function
 def value_iteration(S: Set, A: Set, P: Dict, R: Dict, gamma: float, max_iterations: int,
@@ -56,3 +57,9 @@ def value_iteration(S: Set, A: Set, P: Dict, R: Dict, gamma: float, max_iteratio
         policy[s] = min(last_value, key = last_value.get)
 
     return {"optimal_policy": policy, "value_function": V_next}
+
+# Store value iteration results in a pickle (.pkl) file
+def store_results(results, nech, systemLeadtime, capacity, maxA, cb, h):
+    ''' Takes the value iteration results as an input and stores the results in a .pkl file'''
+    filename = fr'PolicyResults/{nech}ech_{systemLeadtime}_cap{capacity}_MOQ{maxA}_sl{cb[0]*100/(cb[0]+h[0]):.1f}.pkl'
+    pickle.dump(results, open(filename, "wb"))
