@@ -142,17 +142,21 @@ def simulate_2ech_nolead(num_periods: int, gamma: float, ils0: tuple, h: List, p
 
     for t in range(num_periods):
         # Step 1
+        # print(f"start ILs = {(dc_il, w_il)}")
         dc_q, w_q = policy[(dc_il, w_il)]   # Obtain optimal order quantity for DC and warehouse
+        # print(f"Action = {(dc_q, w_q)}")
         dc_il += min(relu(w_il) + w_q, relu(-w_il) + dc_q)   # Updates DC IL with replenishment order based on what warehouse can send
         w_il += (w_q - dc_q)                # Update warehouse IL once replenishment order arrives and order is sent to DC
         ILs_pre_demand.append((dc_il, w_il))                 # Store ILs at warehouse and DC before customer demand is realised
 
         # Step 2
         d = int(generate_demand(demand_distribution))   # Customer demand is realised
+        # print(f"Demand = {d}")
         dc_il -= d                                      # DC sends order to customer
 
         # Steps 3 and 4
         period_cost = relu(dc_il)*h[0] + relu(w_il)*h[1] + relu(-dc_il)*p[0] + relu(-w_il)*p[1]  # Costs incurred in the time period
+        # print(f"Period cost = {period_cost}, discounted cost = {(gamma**t)*period_cost}")
         total_cost += (gamma**t)*period_cost      # Total system costs incurred across simulation time horizon so far
 
         # Check IL bounds
@@ -167,7 +171,8 @@ def simulate_2ech_nolead(num_periods: int, gamma: float, ils0: tuple, h: List, p
         demands.append(d)
         actions.append((dc_q, w_q))
 
-        if period_cost*(gamma**t) < tol:  # Convergence stopping criterion for negligible cost increase
+        if 0 < period_cost*(gamma**t) < tol:  # Convergence stopping criterion for negligible cost increase
+            # print(f"Converged at {t} when starting with {ils0}")
             break
 
     return states_visited, ILs_pre_demand, costs, demands, actions, total_cost
