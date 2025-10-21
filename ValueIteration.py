@@ -59,7 +59,7 @@ def value_iteration(S: Set, A: Set, P: Dict, R: Dict, gamma: float, max_iteratio
     return {"optimal_policy": policy, "value_function": V_next}
 
 # Store value iteration results in a pickle (.pkl) file
-def store_results(results, nech, systemLeadtime, capacity, maxA, cb, h):
+def store_results(results, nech, systemLeadtime, capacity, maxA, cb, h, gamma):
     ''' Takes the value iteration results as an input and stores the results in a .pkl file'''
-    filename = fr'PolicyResults/{nech}ech_{systemLeadtime}_cap{capacity}_MOQ{maxA}_sl{cb[0]*100/(cb[0]+h[0]):.1f}.pkl'
+    filename = fr'PolicyResults/{nech}ech_{systemLeadtime}_cap{capacity}_MOQ{maxA}_sl{cb[0]*100/(cb[0]+h[0]):.1f}_gamma{gamma}.pkl'
     pickle.dump(results, open(filename, "wb"))

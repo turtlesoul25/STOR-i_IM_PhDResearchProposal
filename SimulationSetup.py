@@ -1,6 +1,7 @@
 # Import packages
 from typing import Set, Callable, Dict, List
 import numpy as np
+import matplotlib.pyplot as plt
 
 def relu(x):
     ''' Returns x if positive and 0 otherwise'''
@@ -19,26 +20,28 @@ def generate_demand(demand_distribution: Dict) -> float:
     return np.random.choice([*demand_distribution], p = [*demand_distribution.values()])
 
 
-def simulate_1ech_nolead(num_periods: int, il0: int, h: float, p: float, 
-                     demand_distribution: Dict, policy: Dict):
+def simulate_1ech_nolead(num_periods: int, gamma: float, il0: int, h: float, p: float, 
+                     demand_distribution: Dict, policy: Dict, tol: float):
     '''
     Simulates a single echelon supply chain containing a warehouse supplying 
     inventory to a customer with stochastic demand without any lead time
     --------
     Inputs: 
         num_periods: length of simulation horizon
+        gamma: discount factor for costs 
         il0: initial inventory level at warehouse
         h: unit holding cost at warehouse
         p: unit backlog penalty cost at warehouse
         demand_distribution: dictionary describing probability distribution of customer demand
         policy: warehouse ordering policy
+        tol: convergence threshold (stopping critertion) to detect negligible change in costs
         
     Returns:
         states_visited: List with history of ILs at warehouse from each time period of the simulation
         ILs_pre_demand: List with history of ILs after orders arrive and before customer demand is realised
         costs: List with history of costs incurred at warehouse in each time period
         demands: List with history of customer demand from each time period
-        total_cost: Total cost incurred by warehouse across simulation horizon
+        total_cost: Total discounted cost incurred by warehouse across simulation horizon
     '''
 
 
@@ -56,8 +59,8 @@ def simulate_1ech_nolead(num_periods: int, il0: int, h: float, p: float,
         ILs_pre_demand.append(il) # Add warehouse IL after replenishment order arrives and before customer demand is realised 
         d = int(generate_demand(demand_distribution))  # Customer demand is realised
         il -= d                # Warehouse sends inventory to customer (or updates backlogs)
-        period_cost = max(il, 0)*h + max(-il, 0)*p   # Cost incurred in the current time period
-        total_cost += period_cost                    # Update total costs incurred in the system across simulation horizon so far
+        period_cost = relu(il)*h + relu(-il)*p   # Cost incurred in the current time period
+        total_cost += (gamma**t)*period_cost                    # Update total costs incurred in the system across simulation horizon so far
         
         # Add IL, cost, demand and action from the current time period to histories
         states_visited.append(il)
@@ -65,24 +68,29 @@ def simulate_1ech_nolead(num_periods: int, il0: int, h: float, p: float,
         demands.append(d)
         actions.append(action)
 
+        if period_cost*(gamma**t) < tol:     # Convergence stopping criterion for negligible cost increase
+            break
+
     return states_visited, ILs_pre_demand, costs, demands, total_cost
 
 
 
-def simulate_1ech_constantlead(num_periods: int, ip0: tuple, h: float, p: float, 
-                     demand_distribution: Dict, policy: Dict):
+def simulate_1ech_constantlead(num_periods: int, gamma: float, ip0: tuple, h: float, p: float, 
+                     demand_distribution: Dict, policy: Dict, tol: float):
     '''
     Simulates a single echelon supply chain containing a warehouse supplying 
     inventory to a customer with stochastic demand with constant, deterministic lead time
     --------
     Inputs: 
         num_periods: length of simulation horizon
+        gamma: discount factor for costs
         ip0: tuple describing initial inventory position at warehouse
         h: unit holding cost at warehouse
         p: unit backlog penalty cost at warehouse
         demand_distribution: dictionary describing probability distribution of customer demand
         lead_time: lead time for orders placed by warehouse with production facility
         policy: warehouse ordering policy
+        tol: convergence threshold (stopping critertion) to detect negligible change in costs
         
     Returns:
         states_visited: List with history of ILs at warehouse from each time period of the simulation
@@ -106,8 +114,8 @@ def simulate_1ech_constantlead(num_periods: int, ip0: tuple, h: float, p: float,
         ILs_pre_demand.append(new_il)                        # Add IL at warehouse before customer demand is realised
         d = int(generate_demand(demand_distribution))        # Customer demand is realised
         new_il -= d                                          # Warehouse sends inventory to customer (or updates backlogs)
-        period_cost = max(new_il, 0)*h + max(-new_il, 0)*p   # Cost incurred in the current time period
-        total_cost += period_cost                            # Update total costs incurred in the system across simulation horizon so far
+        period_cost = relu(new_il)*h + relu(-new_il)*p       # Cost incurred in the current time period
+        total_cost += (gamma**t)*period_cost                 # Update total costs incurred in the system across simulation horizon so far
         ip = (new_il, ) + new_outstanding_orders             # Update inventory position after customer demand is realised and before next time period begins
 
         # Add IL, cost, demand and action from the current time period to histories
@@ -116,16 +124,21 @@ def simulate_1ech_constantlead(num_periods: int, ip0: tuple, h: float, p: float,
         demands.append(d)
         actions.append(action)
 
+        if period_cost*(gamma**t) < tol:     # Convergence stopping criterion for negligible cost increase
+            break
+
     return states_visited, ILs_pre_demand, costs, demands, total_cost
 
 
 
-def simulate_2ech_nolead(num_periods: int, ils0: tuple, h: List, p: List, 
-                         demand_distribution: Dict, policy: Dict):
+def simulate_2ech_nolead(num_periods: int, gamma: float, ils0: tuple, h: List, p: List, 
+                         demand_distribution: Dict, policy: Dict, tol: float):
     
     dc_il, w_il, total_cost = ils0[0], ils0[1], 0
     states_visited = [ils0]
     ILs_pre_demand, costs, demands, actions = [], [], [], []
+    dc_il_bounds = [min(ils[0] for ils in policy), max(ils[0] for ils in policy)]
+    w_il_bounds = [min(ils[1] for ils in policy), max(ils[1] for ils in policy)]
 
     for t in range(num_periods):
         # Step 1
@@ -136,11 +149,17 @@ def simulate_2ech_nolead(num_periods: int, ils0: tuple, h: List, p: List,
 
         # Step 2
         d = int(generate_demand(demand_distribution))   # Customer demand is realised
-        dc_il -= d                                      # Dc sends order to customer
+        dc_il -= d                                      # DC sends order to customer
 
         # Steps 3 and 4
         period_cost = relu(dc_il)*h[0] + relu(w_il)*h[1] + relu(-dc_il)*p[0] + relu(-w_il)*p[1]  # Costs incurred in the time period
-        total_cost += period_cost      # Total system costs incurred across simulation time horizon so far
+        total_cost += (gamma**t)*period_cost      # Total system costs incurred across simulation time horizon so far
+
+        # Check IL bounds
+        if not dc_il_bounds[0] <= dc_il <= dc_il_bounds[1]:  # If DC_il outside allowed limit
+            dc_il = max(min(dc_il, dc_il_bounds[1]), dc_il_bounds[0])
+        if not w_il_bounds[0] <= w_il <= w_il_bounds[1]:  # If w_il outside allowed limit
+            w_il = max(min(w_il, w_il_bounds[1]), w_il_bounds[0])
 
         # Add ILs, costs, demands, actions to the list of histories
         states_visited.append((dc_il, w_il))
@@ -148,9 +167,14 @@ def simulate_2ech_nolead(num_periods: int, ils0: tuple, h: List, p: List,
         demands.append(d)
         actions.append((dc_q, w_q))
 
+        if period_cost*(gamma**t) < tol:  # Convergence stopping criterion for negligible cost increase
+            break
+
     return states_visited, ILs_pre_demand, costs, demands, actions, total_cost
 
-def clean_decentralised_2ech_policy(policy, S, Q_max):
+
+
+def clean_decentralised_2ech_policy(policy: Dict, S: int, Q_max:int, dwoc: bool = False):
     '''
     Reformats a decentralised policy to include decisions of warehouse and DC for each IL tuple
     
@@ -158,12 +182,101 @@ def clean_decentralised_2ech_policy(policy, S, Q_max):
         policy: Dictionary containing the warehouse order policy for each IL tuple at (DC, warehouse)
         S: order up to level followed by DC
         Q_max: maximum allowed order quantity for DC
-        
+        dwoc (boolean): if True, implement DWOC, otherwise exclude
+
     Outputs:
         full_policy: Dictionary containing (DC, warehouse) optimal order quantity as the value 
             for each (DC, warehouse) IL combination
     '''
 
-    full_policy = {(dc_il, w_il): (min(relu(S - dc_il), Q_max), w_q) for (dc_il, w_il), w_q in policy.items()}
+
+    full_policy = {(dc_il, w_il): (min(relu(S - dc_il), Q_max, relu(w_il)) if dwoc else min(relu(S - dc_il), Q_max), w_q) for (dc_il, w_il), w_q in policy.items()}
     return full_policy
+
+
+
+def simulate_2ech_replications(policy: Dict, nreps: int, num_periods: int, gamma: float, h: List, p: List, 
+                               demand_distribution: Dict, tol: float, ils0_set: Set, seed=1234):
+    '''
+    Executes nruns replications of simulations of a 2-echelon supply chain experiencing
+    stochastic demand and implementing a given policy.
     
+    Inputs: 
+        policy: Dictionary describing DC and warehouse ordering policy for a given DC, warehouse inventory level combination
+        nreps: number of replications of the simulation
+        num_periods: length of each simulation
+        gamma: discount factor for costs incurred during each simulation
+        h: unit holding cost at DC and warehouse
+        p: unit backlog penalty cost at DC and warehouse
+        demand_distribution: dictionary describing probability distribution of customer demand
+        ils0_set: set of initial inventory level tuples for each simulation
+        seed: seed for reproducibility
+    
+    Outputs:
+        simulation_costs: Dictionary describing the average total discounted costs across nreps replications
+                of simulations using the given policy from each starting initial inventory level scenario
+    '''
+
+    ils_set = sorted(policy.keys() & ils0_set)    # Take intersection of given initial inventory level set and possible starting states under given policy system
+    simulation_costs = {key: 0 for key in ils_set}   # Dictionary to store average total discounted cost for each initial IL
+
+    for key in ils_set:    # for each initial IL scenario
+        np.random.seed(seed)   # set seed
+        discounted_costs = []  # List to store total discounted costs from each simulation
+        for _ in range(nreps): # conduct nreps replications
+            sim_results = simulate_2ech_nolead(num_periods, gamma, key, h, p,
+                                            demand_distribution, policy, tol)        # individual simulation of num_periods length
+            discounted_costs.append(sim_results[-1])        # Add total discounted cost from performed simulation                            
+        simulation_costs[key] = sum(discounted_costs)/nreps # Average total discounted costs across nreps simulation replications
+
+    return simulation_costs
+
+
+def make_cost_plot_dict(optimal_dict):
+    DC_cost = dict((x1, [[], []]) for (x1, x2) in optimal_dict) # store W il and total cost for each DC il
+    W_cost = dict((x2, [[], []]) for (x1, x2) in optimal_dict)  # store DC il and total cost for each W il
+    for (x1, x2), cost in optimal_dict.items():
+        DC_cost[x1][0].append(x2)
+        DC_cost[x1][1].append(cost/1000)
+        W_cost[x2][0].append(x1)
+        W_cost[x2][1].append(cost/1000)
+
+    return DC_cost, W_cost
+
+
+
+def two_cost_plot(VI_dict, simulation_dict, colour_by="W", title=None):    
+    
+    DC_cost, W_cost = make_cost_plot_dict(VI_dict)
+    DC_2_cost, W_2_cost = make_cost_plot_dict(simulation_dict)
+
+    cost_dict = DC_cost if colour_by == "DC" else W_cost
+    cost_sim_dict = DC_2_cost if colour_by == "DC" else W_2_cost
+    x_site = "DC" if colour_by=="W" else "W"
+
+    # Creates a cost vs IL level plot where each line represents the IL at the site in "colour_by"
+    cmap = plt.get_cmap("tab20")
+    keys = sorted(cost_dict.keys())
+    colors = cmap([i/(len(keys)-1) for i in range(len(keys))])
+
+    for il, color in zip(keys, colors):
+        if il in cost_dict:
+            plt.plot(cost_dict[il][0], cost_dict[il][1], "--", label=il, color=color)
+        if il in cost_sim_dict:    
+            plt.plot(cost_sim_dict[il][0], cost_sim_dict[il][1], ":", color=color)
+
+    plt.xlabel(f"Inventory level at {x_site}", fontsize=18)
+    plt.ylabel("Optimal Cost (in 1000s)", fontsize=18)
+    plt.title(f"DP (dotted) and simulation (dashed) costs in a {title}")
+    if min(keys) >= 0:
+        leg = plt.legend(title=f"{colour_by} IL", bbox_to_anchor=(1,1))
+    else:
+        leg = plt.legend(title=f"{colour_by} IL", bbox_to_anchor=(1,1), fontsize=10, ncol=1)
+    for line in leg.get_lines():
+        # line.set_linestyle((0, (3, 5, 1, 5)))
+        line.set_linestyle('-')
+
+    plt.grid()
+    plt.tight_layout()
+    # plt.savefig(f"Figures/multi_echelon/twocost_{cost_names[0]}_dash_{cost_names[1]}_dot_leg{colour_by}_cap{capacity}_MOQ{maxA}_sl{cb[0]*100/(cb[0]+h[0]):.1f}.pdf", dpi=300)
+    plt.show() 
