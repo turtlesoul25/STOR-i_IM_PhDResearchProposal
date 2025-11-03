@@ -13,7 +13,7 @@ def create_state_space(capacity: tuple, increment: int, n_ech: int, lead_times: 
 
     # Possible inventory levels at each site (we assume that all sites have the same capacity)
     IL = set(int(x) for x in np.arange(capacity[0], capacity[1]+1, increment))
-    arriving_orders = set(int(x) for x in np.arange(0, abs(capacity[0])+capacity[1]+1, increment))
+    arriving_orders = set(int(x) for x in np.arange(0, capacity[1]+1, increment))
 
     # Possible set of states
     S = sorted(set((*inv, *arriving) for inv in itertools.product(IL, repeat=n_ech) for arriving in itertools.product(arriving_orders, repeat=sum(lead_times))))
@@ -29,7 +29,7 @@ def create_action_space(capacity: tuple, increment: int, n_ech: int, max_demand:
     with format (q1, ..., qn) where qj is the quantity ordered by site j from site j+1''' 
 
     # Maximum order quantity at each site is lowest_capacity + maximum demand so that backlogs can be cleared
-    order_set = set(int(x) for x in np.arange(0, capacity[1] + max_demand + 1, increment))
+    order_set = set(int(x) for x in np.arange(0, relu(-capacity[0]) + max_demand + 1, increment))
 
     # Possible actions
     A = sorted(set(order_tuple for order_tuple in itertools.product(order_set, repeat=n_ech)))
@@ -92,22 +92,59 @@ def create_P(S: Set, A: Set, state_idx: Dict, action_idx: Dict, demand_distribut
     return P_array
 
 def create_R(S: Set, A: Set, state_idx: Dict, action_idx: Dict, demand_distribution: Dict,
-             hold_costs: List, backlog_costs: List, lead_times: List):
+             hold_costs: List, backlog_costs: List, lead_times: List, ProbTrans_Array: np.ndarray = None):
     '''
     Creates an array containing the reward obtained under action a chosen at
     state s for a centralised multi-echelon serial system with lead times.
     '''
 
+    # def cost_function(s, a, sp):
+    #     '''Calculates cost'''
+
+
     def expected_cost_function(s, a):
         '''Calculates expected cost incurred if action a is taken at state s'''
+        
+        # Store possible final DC ILs with probability and final warehouse ILs
+        dc_il_next = [(s[0] + s[2] - dt, prob) for dt, prob in demand_distribution.items()] 
+        w_il_next = s[1] + a[1] - a[0]  ##### Need to change if warehouse has nonzero lead times
+        
+        warehouse_cost = hold_costs[1]*relu(w_il_next) + backlog_costs[1]*relu(-w_il_next)
+        dc_cost = hold_costs[0]*sum(relu(il)*prob for (il, prob) in dc_il_next) + backlog_costs[0]*sum(relu(-il)*prob for (il, prob) in dc_il_next)
 
+        return warehouse_cost + dc_cost
+    
+    R_array = np.zeros((len(S), len(A)))
+
+    for s in S: # for each state s
+        s_idx = state_idx[s]
+        for a in A: # for each action a
+            a_idx = action_idx[a]
+            R_array[s_idx, a_idx] = expected_cost_function(s, a) # calculate reward for taking action a at state s
+
+    return R_array
+        
         ##### WORK ON REWARD FUNCTION FROM HERE
         
 
-S, state_idx = create_state_space((-400, 400), 100, 2, [1, 0])
-A, action_idx = create_action_space((400, 400), 100, 2, 200)
-prob_trans = create_P(S, A, state_idx, action_idx, 
-                      {0: 0.2, 100:0.6, 200:0.2}, (-400, 400), [1, 0])
+def cL_value_update_func(state_idx: Dict, action_idx: Dict, capacity: tuple, demand_distribution: Dict):
+    max_demand = max(demand_distribution.keys())
+    def bellman_eq_2cL(s, S, A, P, R, gamma, Vk):
+        ''' Calculates the values from taking each action at state s '''
+        s_idx = state_idx[s]
+
+        # Ordering decisions should ensure that site capacity is not exceeded
+        values = dict((a, 0) for a in A if s[0]+a[0] <= min(capacity[1], max_demand) and s[1]+a[1] <= min(capacity[1], max_demand))
+
+        if not values: # if no possible ordering decisions, then no units need to be ordered
+            values = {(0, 0): 0}
+        
+        for a in values.keys():
+            a_idx = action_idx[a]
+            values[a] = R[s_idx, a_idx] + gamma*sum([P[s_idx, a_idx, state_idx[sp]]*Vk[sp] for sp in S])
+        return values
+
+    return bellman_eq_2cL
 
 
 # # Code to check transition probabilities
