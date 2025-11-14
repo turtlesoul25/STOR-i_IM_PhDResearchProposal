@@ -7,14 +7,14 @@ def relu(x):
     return max(x, 0)
 
 
-def create_state_space(capacity: tuple, increment: int, n_ech: int, lead_times: List): 
+def create_state_space(capacity: tuple, increment: int, n_ech: int, max_demand: int, lead_times: List): 
     ''' Creates a set representing the state space for an n-echelon problem with lead times
     with format (ILs at each site, outstanding orders at each site)'''
 
     # Possible inventory levels at each site (we assume that all sites have the same capacity)
     IL = set(int(x) for x in np.arange(capacity[0], capacity[1]+1, increment))
-    arriving_orders = set(int(x) for x in np.arange(0, capacity[1]+1, increment))
-
+    arriving_orders = set(int(x) for x in np.arange(0, relu(-capacity[0]) + max_demand + 1, increment))
+    ################ What will be the max size of arriving orders????
     # Possible set of states
     S = sorted(set((*inv, *arriving) for inv in itertools.product(IL, repeat=n_ech) for arriving in itertools.product(arriving_orders, repeat=sum(lead_times))))
 
@@ -40,7 +40,7 @@ def create_action_space(capacity: tuple, increment: int, n_ech: int, max_demand:
     return A, action_idx
 
 
-def create_P(S: Set, A: Set, state_idx: Dict, action_idx: Dict, demand_distribution: Dict, capacity: Dict, lead_times: List):
+def create_P(S: Set, A: Set, state_idx: Dict, action_idx: Dict, demand_distribution: Dict, capacity: Dict, n_ech: int, lead_times: List):
     '''Creates an array containing transition probabilities from s to s' under action a
     for a centralised multi-echelon serial system with lead times'''
 
@@ -49,32 +49,47 @@ def create_P(S: Set, A: Set, state_idx: Dict, action_idx: Dict, demand_distribut
         prob = 0
 
         # Check next inventory level for warehouse
-        s_next_w = s[1] + a[1] - a[0]
-        s_next_w = max(capacity[0], min(s_next_w, capacity[1]))  # Truncate W IL which is outside of backlog/capacity range
+        next_w_il = s[1] + a[1] - a[0] if lead_times[1] == 0 else s[1] + s[n_ech + lead_times[0]] - a[0]
+        next_w_il = max(capacity[0], min(next_w_il, capacity[1]))  # Truncate W IL which is outside of backlog/capacity range
 
-        # Check outstanding orders
-        q_sent_to_DC = min(relu(s[1])+a[1], relu(-s[1]) + a[0])
-        arr_orders_DC = s[3:(2+lead_times[0])] + (q_sent_to_DC,) 
-
-        if (s_next_w, ) + arr_orders_DC != s_next[1:]:
+        if next_w_il != s_next[1]:
             return prob
+        
+        # Check outstanding orders for warehouse
+        arr_orders_w = () if lead_times[1] == 0 else s[n_ech + lead_times[0] + 1 : n_ech + lead_times[0] + lead_times[1]] + (a[1], )
+        if lead_times[1] > 0 and arr_orders_w != s_next[n_ech + lead_times[0]: n_ech + lead_times[0] + lead_times[1]]:
+            return prob
+        
 
+        # Check outstanding orders for DC
+        q_sent_to_DC = min(a[0] + relu(-s[1]), relu(s[1]) + a[1] if lead_times[1] == 0 else relu(s[1]) + s[n_ech + lead_times[0]])
+        arr_orders_dc = () if lead_times[0] == 0 else s[n_ech + 1 : n_ech + lead_times[0]] + (q_sent_to_DC, )
+        # print(arr_orders_dc, s_next[n_ech: n_ech + lead_times[0]])
+        if lead_times[0] > 0 and arr_orders_dc != s_next[n_ech: n_ech + lead_times[0]]:
+            return prob
+        
         # Check next inventory level for DC
+        dc_il_pre_demand = s[0] + q_sent_to_DC if lead_times[0] == 0 else s[0] + s[n_ech]
+
+        if s_next[0] > dc_il_pre_demand:  # Next DC IL cannot be greater than DC IL pre-demand
+            return prob
+        
         for d in demand_distribution.keys():
-            s_next_DC = s[0] + s[2] - d
-            if capacity[0] < s_next_DC < capacity[1] and s_next_DC == s_next[0]:   # Non truncated state
+            next_dc_il = dc_il_pre_demand - d
+
+            if capacity[0] < next_dc_il < capacity[1] and next_dc_il == s_next[0]:   # non-truncated state
                 prob = demand_distribution.get(d, 0)
                 return prob
-
-            elif s_next_DC >= capacity[1] and s_next[0] == capacity[1]: # truncated state above capacity
-                prob = sum(demand_distribution[dem] for dem in demand_distribution if s[0] + s[2] - dem >= capacity[1])
+            
+            elif next_dc_il >= capacity[1] and s_next[0] == capacity[1]:      # truncated state above capacity
+                prob = sum(demand_distribution[dem] for dem in demand_distribution if dc_il_pre_demand - dem >= capacity[1])
                 return prob
             
-            elif s_next_DC <= capacity[0] and s_next[0] == capacity[0]: # truncated state below backlog limit
-                prob = sum(demand_distribution[dem] for dem in demand_distribution if s[0] + s[2] - dem <= capacity[0])
+            elif next_dc_il <= capacity[0] and s_next[0] == capacity[0]: # truncated state below backlog limit
+                prob = sum(demand_distribution[dem] for dem in demand_distribution if dc_il_pre_demand - dem <= capacity[0])
                 return prob
-            
         
+
         return prob
             
     # Array to store transition probabilities for all combinations of s, a, s'
@@ -92,22 +107,22 @@ def create_P(S: Set, A: Set, state_idx: Dict, action_idx: Dict, demand_distribut
     return P_array
 
 def create_R(S: Set, A: Set, state_idx: Dict, action_idx: Dict, demand_distribution: Dict,
-             hold_costs: List, backlog_costs: List, lead_times: List, ProbTrans_Array: np.ndarray = None):
+             hold_costs: List, backlog_costs: List, n_ech: int, lead_times: List):
     '''
     Creates an array containing the reward obtained under action a chosen at
     state s for a centralised multi-echelon serial system with lead times.
     '''
 
-    # def cost_function(s, a, sp):
-    #     '''Calculates cost'''
-
-
     def expected_cost_function(s, a):
         '''Calculates expected cost incurred if action a is taken at state s'''
         
         # Store possible final DC ILs with probability and final warehouse ILs
-        dc_il_next = [(s[0] + s[2] - dt, prob) for dt, prob in demand_distribution.items()] 
-        w_il_next = s[1] + a[1] - a[0]  ##### Need to change if warehouse has nonzero lead times
+        w_il_next = s[1] + a[1] - a[0] if lead_times[1] == 0 else s[1] + s[n_ech + lead_times[0]] - a[0]
+        if lead_times[0] == 0:
+            q_sent_to_DC = min(a[0] + relu(-s[1]), relu(a[0] + w_il_next))
+            dc_il_next = [(s[0] + q_sent_to_DC - dt, prob) for dt, prob in demand_distribution.items()]
+        else:
+            dc_il_next = [(s[0] + s[n_ech] - dt, prob) for dt, prob in demand_distribution.items()] 
         
         warehouse_cost = hold_costs[1]*relu(w_il_next) + backlog_costs[1]*relu(-w_il_next)
         dc_cost = hold_costs[0]*sum(relu(il)*prob for (il, prob) in dc_il_next) + backlog_costs[0]*sum(relu(-il)*prob for (il, prob) in dc_il_next)
@@ -124,7 +139,6 @@ def create_R(S: Set, A: Set, state_idx: Dict, action_idx: Dict, demand_distribut
 
     return R_array
         
-        ##### WORK ON REWARD FUNCTION FROM HERE
         
 
 def cL_value_update_func(state_idx: Dict, action_idx: Dict, capacity: tuple, demand_distribution: Dict):
@@ -134,7 +148,7 @@ def cL_value_update_func(state_idx: Dict, action_idx: Dict, capacity: tuple, dem
         s_idx = state_idx[s]
 
         # Ordering decisions should ensure that site capacity is not exceeded
-        values = dict((a, 0) for a in A if s[0]+a[0] <= min(capacity[1], max_demand) and s[1]+a[1] <= min(capacity[1], max_demand))
+        values = dict((a, 0) for a in A if s[0]+a[0] <= min(capacity[1], max_demand) and s[1]+a[1] <= capacity[1])
 
         if not values: # if no possible ordering decisions, then no units need to be ordered
             values = {(0, 0): 0}
