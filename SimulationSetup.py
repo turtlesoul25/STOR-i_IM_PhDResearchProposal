@@ -179,6 +179,83 @@ def simulate_2ech_nolead(num_periods: int, gamma: float, ils0: tuple, h: List, p
 
 
 
+def simulate_2ech_constlead(num_periods: int, gamma: float, ips0: tuple, h: List, p: List, 
+                            demand_distribution: Dict, lead_times: List, policy: Dict, tol: float):
+    '''
+    Simulates a 2 echelon supply chain containing a warehouse and a DC
+    where the DC supplies inventory to a customer with stochastic demand with constant lead times
+    -------
+    Inputs: 
+        num_periods: length of simulation_horizon
+        gamma: discount factor for costs
+        il0: initial inventory level at warehouse
+        h: unit holding cost at warehouse
+        p: unit backlog penalty cost at warehouse
+        demand_distribution: dictionary describing the probability distribution for customer demand
+        lead_times: list containing the lead time at each site in the supply chain
+        policy: ordering policy at both sites
+        tol: convergence threshold (stopping criterion) to detect negligible change in costs
+        
+    Returns: 
+        states_visited: List with history of ILs at both sites from each time period of the simulation
+        ILs_pre_demand List with history of ILs after orders arrive and before customer demand is realised
+        costs: List with history of supply chain costs incurred in each time period
+        demands: List with history of customer demand from each time period
+        total_cost: Total discounted cost incurred by warehouse across simulation horizon
+    '''
+
+    dc_il, w_il, total_cost = ips0[0], ips0[1], 0
+    dc_arr_orders = ips0[2 : 2+lead_times[0]] if lead_times[0] > 0 else ()
+    w_arr_orders = ips0[2+lead_times[0]:] if lead_times[1] > 0 else ()
+
+    states_visited = [ips0] 
+    ILs_pre_demand, costs, demands, actions = [], [], [], []
+    dc_il_bounds = [min(ils[0] for ils in policy), max(ils[0] for ils in policy)]
+    w_il_bounds = [min(ils[1] for ils in policy), max(ils[1] for ils in policy)]
+
+    for t in range(num_periods):
+        # Step 1: warehouse and DC place orders according to policy
+        dc_q, w_q = policy[(dc_il, w_il, ) + dc_arr_orders + w_arr_orders]
+        # print(f"start ILs = {(dc_il, w_il)}")
+        # print(f"action = {(dc_q, w_q)}")
+
+
+        # Step 2: warehouse receives order, ships to DC, then DC receives order
+        q_sent_to_dc = min(dc_q + relu(-w_il), relu(w_il) + w_q)                  # quantity shipped out by warehouse
+        w_il += (w_q - dc_q) if lead_times[1] == 0 else (w_arr_orders[0] - dc_q)    # update warehouse IL                                        # update warehouse IL
+        dc_il += q_sent_to_dc if lead_times[0] == 0 else dc_arr_orders[0]       # DC receives shipment
+        dc_arr_orders = dc_arr_orders[1:] + (q_sent_to_dc, ) if lead_times[0] > 0 else ()  # update outstanding orders for DC
+        w_arr_orders = w_arr_orders[1:] + (w_q, ) if lead_times[1] > 0 else ()           # update outstanding orders for warehouse
+        ILs_pre_demand.append((dc_il, w_il))
+
+        # Step 3: Customer demand is realised
+        d = int(generate_demand(demand_distribution))     # customer demand realised
+        dc_il -= d 
+        # print(f"Demand = {d}, final ILs = {dc_il, w_il}")                                       # Update DC IL after customer demand
+
+        # Step 4: Charge costs
+        period_cost = relu(dc_il)*h[0] + relu(w_il)*h[1] + relu(-dc_il)*p[0] + relu(-w_il)*p[1]  # Costs incurred in the time period
+        # print(f"Period cost = {period_cost}, discounted cost = {(gamma**t)*period_cost}")
+        total_cost += (gamma**t)*period_cost
+
+        # Check IL bounds
+        if not dc_il_bounds[0] <= dc_il <= dc_il_bounds[1]:    # If DC IL outside allowed limit
+            dc_il = max(min(dc_il, dc_il_bounds[1]), dc_il_bounds[0])
+        if not w_il_bounds[0] <= w_il <= w_il_bounds[1]:       # If warehouse IL outside allowed limit
+            w_il = max(min(w_il, w_il_bounds[1]), w_il_bounds[0])
+
+        # Add ILs, costs, demands, actions to the list of histories
+        states_visited.append((dc_il, w_il))
+        costs.append(period_cost)
+        demands.append(d)
+        actions.append((dc_q, w_q))
+
+        if 0 < period_cost*(gamma**t) < tol:  # Convergence stopping criterion for negligible cost increase
+            print(f"Converged at {t} when starting with {ips0}")
+            break
+
+    return states_visited, ILs_pre_demand, costs, demands, actions, total_cost
+
 def clean_decentralised_2ech_policy(policy: Dict, S: int, Q_max:int, dwoc: bool = False):
     '''
     Reformats a decentralised policy to include decisions of warehouse and DC for each IL tuple
@@ -201,7 +278,7 @@ def clean_decentralised_2ech_policy(policy: Dict, S: int, Q_max:int, dwoc: bool 
 
 
 def simulate_2ech_replications(policy: Dict, nreps: int, num_periods: int, gamma: float, h: List, p: List, 
-                               demand_distribution: Dict, tol: float, ils0_set: Set, seed=1234):
+                               demand_distribution: Dict, tol: float, ils0_set: Set, lead_times: List, simulation_func: Callable, seed=1234):
     '''
     Executes nruns replications of simulations of a 2-echelon supply chain experiencing
     stochastic demand and implementing a given policy.
@@ -229,54 +306,58 @@ def simulate_2ech_replications(policy: Dict, nreps: int, num_periods: int, gamma
         np.random.seed(seed)   # set seed
         discounted_costs = []  # List to store total discounted costs from each simulation
         for _ in range(nreps): # conduct nreps replications
-            sim_results = simulate_2ech_nolead(num_periods, gamma, key, h, p,
-                                            demand_distribution, policy, tol)        # individual simulation of num_periods length
+            sim_results = simulation_func(num_periods, gamma, key, h, p,
+                                            demand_distribution, lead_times, policy, tol)        # individual simulation of num_periods length
             discounted_costs.append(sim_results[-1])        # Add total discounted cost from performed simulation                            
         simulation_costs[key] = sum(discounted_costs)/nreps # Average total discounted costs across nreps simulation replications
 
     return simulation_costs
 
 
-def make_cost_plot_dict(optimal_dict):
-    DC_cost = dict((x1, [[], []]) for (x1, x2) in optimal_dict) # store W il and total cost for each DC il
-    W_cost = dict((x2, [[], []]) for (x1, x2) in optimal_dict)  # store DC il and total cost for each W il
-    for (x1, x2), cost in optimal_dict.items():
-        DC_cost[x1][0].append(x2)
-        DC_cost[x1][1].append(cost/1000)
-        W_cost[x2][0].append(x1)
-        W_cost[x2][1].append(cost/1000)
-
-    return DC_cost, W_cost
-
-
-
-def two_cost_plot(VI_dict, simulation_dict, colour_by="W", title=None):    
+def make_cost_plot_dict(optimal_dict, lead_times, n_ech):
+    IPs = sorted(set(calculate_ip(state, lead_times, n_ech) for state in optimal_dict)) 
     
-    DC_cost, W_cost = make_cost_plot_dict(VI_dict)
-    DC_2_cost, W_2_cost = make_cost_plot_dict(simulation_dict)
+    W_cost = dict((ip_dc, set()) for (ip_dc, ip_w) in IPs)
+    DC_cost = dict((ip_w, set()) for (ip_dc, ip_w) in IPs)
+    
+    for state, cost in optimal_dict.items():
+        ip_dc, ip_w = calculate_ip(state, lead_times, n_ech)
+
+        W_cost[ip_dc].add((ip_w, cost/1000))
+        DC_cost[ip_w].add((ip_dc, cost/1000))
+
+    return W_cost, DC_cost
+    
+
+def two_cost_plot(VI_dict, simulation_dict, lead_times, n_ech, colour_by="W", title=None):    
+    
+    W_cost, DC_cost = make_cost_plot_dict(VI_dict, lead_times, n_ech)
+    W_2_cost, DC_2_cost = make_cost_plot_dict(simulation_dict, lead_times, n_ech)
 
     cost_dict = DC_cost if colour_by == "DC" else W_cost
     cost_sim_dict = DC_2_cost if colour_by == "DC" else W_2_cost
-    x_site = "DC" if colour_by=="W" else "W"
+    x_site = "DC" if colour_by=="W" else "warehouse"
 
     # Creates a cost vs IL level plot where each line represents the IL at the site in "colour_by"
     cmap = plt.get_cmap("tab20")
     keys = sorted(cost_dict.keys())
     colors = cmap([i/(len(keys)-1) for i in range(len(keys))])
 
-    for il, color in zip(keys, colors):
-        if il in cost_dict:
-            plt.plot(cost_dict[il][0], cost_dict[il][1], "--", label=il, color=color)
-        if il in cost_sim_dict:    
-            plt.plot(cost_sim_dict[il][0], cost_sim_dict[il][1], ":", color=color)
+    for ip, color in zip(keys, colors):
+        if ip in cost_dict:
+            ips, costs = zip(*sorted(cost_dict[ip]))
+            plt.plot(ips, costs, "--", label=ip, color=color)
+        if ip in cost_sim_dict:   
+            ips, costs = zip(*sorted(cost_sim_dict[ip])) 
+            plt.plot(ips, costs, ":", color=color)
 
-    plt.xlabel(f"Inventory level at {x_site}", fontsize=18)
+    plt.xlabel(f"Initial inventory position at {x_site}", fontsize=18)
     plt.ylabel("Optimal Cost (in 1000s)", fontsize=18)
     plt.title(f"DP (dotted) and simulation (dashed) costs in a {title}")
     if min(keys) >= 0:
-        leg = plt.legend(title=f"{colour_by} IL", bbox_to_anchor=(1,1))
+        leg = plt.legend(title=f"{colour_by} IP", bbox_to_anchor=(1,1))
     else:
-        leg = plt.legend(title=f"{colour_by} IL", bbox_to_anchor=(1,1), fontsize=10, ncol=1)
+        leg = plt.legend(title=f"{colour_by} IP", bbox_to_anchor=(1,1), fontsize=10, ncol=1)
     for line in leg.get_lines():
         # line.set_linestyle((0, (3, 5, 1, 5)))
         line.set_linestyle('-')
@@ -285,3 +366,14 @@ def two_cost_plot(VI_dict, simulation_dict, colour_by="W", title=None):
     plt.tight_layout()
     # plt.savefig(f"Figures/multi_echelon/twocost_{cost_names[0]}_dash_{cost_names[1]}_dot_leg{colour_by}_cap{capacity}_MOQ{maxA}_sl{cb[0]*100/(cb[0]+h[0]):.1f}.pdf", dpi=300)
     plt.show() 
+
+
+def calculate_ip(state: tuple, lead_times: List, n_ech: int):
+    ''' Calculates the inventory position for each site in the supply chain'''
+    ips = []
+    next_lead_idx = n_ech
+    for ech in range(n_ech): # for each site
+        ips.append(state[ech] + sum(state[next_lead_idx:next_lead_idx+lead_times[ech]])) # add inventory level + outstanding orders for the current site
+        next_lead_idx += lead_times[ech]
+
+    return tuple(ips)

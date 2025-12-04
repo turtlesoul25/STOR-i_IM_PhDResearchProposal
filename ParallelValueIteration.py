@@ -1,10 +1,11 @@
-# Import packages
 from typing import Set, Callable, Dict
 import numpy as np
 import pickle 
+import multiprocessing as mp
+import itertools
 
 # Define the value iteration algorithm as a function
-def value_iteration(S: Set, A: Set, P: Dict, R: Dict, gamma: float, max_iterations: int,
+def value_iteration_parallel(S: Set, A: Set, P: Dict, R: Dict, gamma: float, max_iterations: int,
                     bellman_eq: Callable, V_init: Dict = None, theta: float = None) -> Dict:
     '''
     Implements the value iteration algorithm to solve a MDP with given
@@ -44,25 +45,44 @@ def value_iteration(S: Set, A: Set, P: Dict, R: Dict, gamma: float, max_iteratio
         # print(k, Vk)
         delta = 0       # Factor to check convergence of value function
         k = k+1         # Increment iterations
-        for s in S:     # Update value function for each state in new iteration
-            V_next[s], policy[s], d = bellman_eq(s, S, A, P, R, gamma, Vk)
-            delta = max(delta, d)
-            # if k == 1:
-            #     print(delta, s, V_next[s]) 
-            # if k == max_iterations:
-            #     print(s, bellman_eq(s, S, A, P, R, gamma, Vk, verbose=True))
+        vf_inputs = (S, A, P, R, gamma, Vk)
+        cl = mp.Pool(3)
+        #value_function = value_function_wrapper(bellman_eq)
+        s_v_d_triplets = cl.starmap(bellman_eq, list(zip(S, itertools.repeat(S),itertools.repeat(A),itertools.repeat(P),itertools.repeat(R),itertools.repeat(gamma),itertools.repeat(Vk))))
+        cl.close()
+
+        # V_next = {s:min(v.values()) for s,v in zip(S,state_action_values)}
+        # delta = max([abs(V_next[s]-Vk[s]) for s in S])
+        # print(delta)
+
+        Vk = {s:v for s, v, _ in s_v_d_triplets}
+        delta = max([d for _, _, d in s_v_d_triplets])
         print(delta)
+
+        # for s in S:     # Update value function for each state in new iteration
+            # V_next[s] = min(bellman_eq(s, S, A, P, R, gamma, Vk).values())
+            # delta = max(delta, abs(V_next[s] - Vk[s]))
         Vk = V_next.copy()      # Update penultimate value function for all states for next iteration
-        
         if theta != None and delta < theta: # Convergence (termination) condition for value function (if applicable)
             print("Converged!")
             break
 
-    # for s in S: # Store optimal policy for each state
-    #     _, policy[s], _  = bellman_eq(s, S, A, P, R, gamma, Vk)
-    #     # _, policy[s], _ = min(last_value, key = last_value.get)
+    for s in S: # Store optimal policy for each state
+        last_value = bellman_eq(s, S, A, P, R, gamma, Vk)
+        policy[s] = min(last_value, key = last_value.get)
 
     return {"optimal_policy": policy, "value_function": V_next}
+
+# def value_function_wrapper(bellman_eq):
+#     def value_function(s, extra_info):
+#         S, A, P, R, gamma, Vk = extra_info
+#         value = min(bellman_eq(s, S, A, P, R, gamma, Vk).values())
+#         delta = abs(value - Vk[s])
+
+#         return s, value, delta
+    
+#     return value_function
+
 
 # Store value iteration results in a pickle (.pkl) file
 def store_results(results, nech, systemLeadtime, capacity, maxA, cb, h, gamma):
