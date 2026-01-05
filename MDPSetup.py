@@ -114,12 +114,12 @@ def create_R(S: Set, A: Set, state_idx: Dict, action_idx: Dict, P: Callable, dem
 
 def cL_value_update_func(S: Set, A: Set, state_idx: Dict, action_idx: Dict, 
                          P: Callable, capacity: tuple, demand_distribution: Dict, n_ech: int, lead_times: List):
-    
+    max_demand = max(demand_distribution.keys())
     def bellman_eq_2cL(s, S, A, P, R, gamma, Vk, verbose = False):
         ''' Calculates the values from taking each action at state s '''
 
         # Ordering decisions should ensure that site maximum inventory level is not exceeded to ensure truncation works correctly
-        values = dict((a, 0) for a in A if s[0]+a[0]+sum(s[n_ech:n_ech+lead_times[0]]) <= capacity[1]+(lead_times[0]*max(demand_distribution.keys())) and s[1]+a[1]+sum(s[n_ech+lead_times[0]:n_ech+lead_times[0]+lead_times[1]]) <= capacity[1]+(lead_times[0]*max(demand_distribution.keys())))
+        values = dict((a, 0) for a in A if s[0]+a[0]+sum(s[n_ech:n_ech+lead_times[0]]) <= capacity[1]+(lead_times[0]*max_demand) and s[1]+a[1]+sum(s[n_ech+lead_times[0]:n_ech+lead_times[0]+lead_times[1]]) <= capacity[1]+(lead_times[1]*max_demand))
         # values = dict((a, 0) for a in A)
         if not values: # if no possible ordering decisions, then no units need to be ordered
             values = {(0, 0): 0}
@@ -131,7 +131,7 @@ def cL_value_update_func(S: Set, A: Set, state_idx: Dict, action_idx: Dict,
             return values
         
         min_value = min(values.values())
-        
+        # print(s, min_value, min(values, key=values.get))
         return min_value, min(values, key=values.get),  abs(Vk[s] - min_value)
 
     return bellman_eq_2cL
