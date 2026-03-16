@@ -372,6 +372,55 @@ def two_cost_plot(VI_dict, simulation_dict, lead_times, n_ech, colour_by="W", ti
     plt.show() 
 
 
+def cost_diff_plot(VI_dict, simulation_dict, lead_times, n_ech, colour_by = "W", title=None):
+    W_cost, DC_cost = make_cost_plot_dict(VI_dict, lead_times, n_ech)
+    W_sim_cost, DC_sim_cost = make_cost_plot_dict(simulation_dict, lead_times, n_ech)
+
+    cost_dict = W_cost if colour_by == "DC" else DC_cost
+    cost_sim_dict = W_sim_cost if colour_by == "DC" else DC_sim_cost
+    x_site = "DC" if colour_by == "W" else "warehouse"
+
+    # Creates a cost vs IL plot where each line represents the IP at the other site
+    cmap = plt.get_cmap("tab20")
+    keys = sorted(cost_sim_dict.keys() & cost_dict.keys())
+    colors = cmap([i/(len(keys) - 1) for i in range(len(keys))])
+
+    for ip, color in zip(keys, colors):
+        x_ips = []
+        cost_diff = []
+        vi_ips_dict = dict(cost_dict[ip])
+        sim_ips_dict = dict(cost_sim_dict[ip])
+        common_ips = vi_ips_dict.keys() & sim_ips_dict.keys()
+
+        for ipn in sorted(common_ips):
+            x_ips.append(ipn)
+            cost_diff.append(abs(vi_ips_dict[ipn] - sim_ips_dict[ipn]))
+
+        plt.plot(x_ips, cost_diff, color=color, label=ip)
+
+    plt.xlabel(f"Initial inventory position at {x_site}", fontsize=18)
+    plt.ylabel(f"Difference in Cost (in 1000s)", fontsize=18)
+    plt.title(f"Difference in DP and simulation costs in a {title}")
+    if min(keys) >= 0:
+        leg = plt.legend(title=f"{colour_by} IP", bbox_to_anchor=(1,1))
+    else:
+        leg = plt.legend(title=f"{colour_by} IP", bbox_to_anchor=(1,1), fontsize=10, ncol=1)
+    for line in leg.get_lines():
+        # line.set_linestyle((0, (3, 5, 1, 5)))
+        line.set_linestyle('-')
+
+    plt.grid()
+    plt.tight_layout()
+    # plt.savefig(f"Figures/multi_echelon/diffcost_{cost_names[0]}_dash_{cost_names[1]}_dot_leg{colour_by}_cap{capacity}_MOQ{maxA}_sl{cb[0]*100/(cb[0]+h[0]):.1f}.pdf", dpi=300)
+    plt.show() 
+
+                
+
+            # vi_ips, vi_costs = zip(*sorted(cost_dict[ip]))
+            # sim_ips, sim_costs = zip(*sorted(cost_sim_dict[ip]))
+
+
+
 def calculate_ip(state: tuple, lead_times: List, n_ech: int):
     ''' Calculates the inventory position for each site in the supply chain'''
     ips = []
